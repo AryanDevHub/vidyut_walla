@@ -21,11 +21,21 @@
                     <h1>Campus Energy VPP</h1>
                     <p>Government Engineering College, Jodhpur</p>
                 </div>
-                <div class="system-status">
-                    <span class="status status--success" id="system-status" role="status" aria-live="polite">
-                        System Operational
-                    </span>
-                    <time class="current-time" id="current-time" datetime=""></time>
+                <div class="header-controls">
+                    <div class="system-status">
+                        <span class="status status--success" id="system-status" role="status" aria-live="polite">
+                            System Operational
+                        </span>
+                        <time class="current-time" id="current-time" datetime=""></time>
+                    </div>
+                    <div class="user-actions">
+                        <button id="theme-switcher" class="btn btn--secondary btn--sm" aria-label="Toggle theme">
+                            💡
+                        </button>
+                        <div id="user-controls">
+                            <button id="login-btn" class="btn btn--secondary">Login</button>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -516,6 +526,9 @@
             </div>
         </div>
     </aside>
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container"></div>
 
     <!-- Load modules as ES6 modules -->
     <script type="module" src="main.js"></script>

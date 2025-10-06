@@ -3,6 +3,8 @@ import { getElement, formatNumber, formatCurrency, formatDateTime, sanitizeHTML,
 import stateManager from './stateManager.js';
 import chartManager from './chartManager.js';
 import apiService from './apiService.js';
+import settingsManager from './settingsManager.js';
+import authService from './authService.js';
 
 /**
  * UI Controller - Manages all UI updates and interactions
@@ -20,6 +22,7 @@ class UIController {
     this.setupNavigation();
     this.setupModal();
     this.setupFormHandlers();
+    this.setupHeaderControls();
     this.updateClock();
     this.setupStateSubscriptions();
     
@@ -52,8 +55,12 @@ class UIController {
         showError(error);
       }
     });
+    
+    const unsubAuth = stateManager.subscribe('isAuthenticated', () => {
+      this.updateHeaderUI();
+    });
 
-    this.unsubscribers.push(unsubStatus, unsubRecommendations, unsubAlerts, unsubLoading, unsubError);
+    this.unsubscribers.push(unsubStatus, unsubRecommendations, unsubAlerts, unsubLoading, unsubError, unsubAuth);
   }
 
   /**
@@ -139,6 +146,42 @@ class UIController {
   }
 
   /**
+   * Setup header controls like theme switcher and auth buttons
+   */
+  setupHeaderControls() {
+    const themeSwitcher = getElement('theme-switcher');
+    if (themeSwitcher) {
+      themeSwitcher.addEventListener('click', () => {
+        const currentTheme = settingsManager.getTheme();
+        const newTheme = currentTheme === 'light' || currentTheme === 'system' ? 'dark' : 'light';
+        settingsManager.setTheme(newTheme);
+      });
+    }
+    
+    // Auth button listeners
+    document.addEventListener('click', async (e) => {
+      if (e.target.id === 'login-btn') {
+        // Simple prompt for demo purposes
+        const username = prompt("Enter username (try 'admin'):");
+        const password = prompt("Enter password (try 'password'):");
+        if (username && password) {
+          try {
+            await authService.login(username, password);
+            showSuccess('Login successful!');
+          } catch (error) {
+            showError(error.message);
+          }
+        }
+      }
+      
+      if (e.target.id === 'logout-btn') {
+        authService.logout();
+        showSuccess('You have been logged out.');
+      }
+    });
+  }
+
+  /**
    * Handle primary button clicks
    */
   async handlePrimaryButtonClick(button) {
@@ -177,12 +220,12 @@ class UIController {
     } catch (error) {
       console.error('Apply settings failed:', error);
       button.textContent = 'Error';
-      showError('Failed to apply settings');
+      showError(error.message || 'Failed to apply settings');
       
       setTimeout(() => {
         button.textContent = originalText;
         button.disabled = false;
-      }, 1500);
+      }, 2500);
     }
   }
 
@@ -190,20 +233,12 @@ class UIController {
    * Apply battery settings
    */
   async applyBatterySettings(section) {
-    const strategy = section.querySelector('select')?.value;
     const targetSOC = section.querySelector('.range-control')?.value;
-
-    if (!strategy || !targetSOC) {
-      throw new Error('Missing battery settings');
-    }
-
     const validation = validate(targetSOC, { min: 20, max: 100 });
-    if (!validation.valid) {
-      throw new Error(validation.error);
-    }
+    if (!validation.valid) throw new Error(validation.error);
 
     await apiService.updateBatterySettings({
-      strategy,
+      strategy: section.querySelector('select')?.value,
       target_soc: parseInt(targetSOC)
     });
   }
@@ -213,11 +248,9 @@ class UIController {
    */
   async applyLoadSchedule(section) {
     const selects = section.querySelectorAll('select');
-    const schedule = Array.from(selects).map(select => select.value);
-
     await apiService.updateLoadSchedule({
-      hvac_schedule: schedule[0] || '11:00 - 13:00',
-      workshop_schedule: schedule[1] || '12:00 - 15:00'
+      hvac_schedule: selects[0]?.value,
+      workshop_schedule: selects[1]?.value
     });
   }
 
@@ -226,26 +259,18 @@ class UIController {
    */
   async applyAlertConfiguration(section) {
     const inputs = section.querySelectorAll('input[type="number"]');
-    const [batteryThreshold, loadThreshold, performanceThreshold] = Array.from(inputs).map(input => input.value);
+    const [battery, load, performance] = Array.from(inputs).map(i => i.value);
 
-    // Validate all inputs
     const validations = [
-      validate(batteryThreshold, { min: 10, max: 50 }),
-      validate(loadThreshold, { min: 300, max: 500 }),
-      validate(performanceThreshold, { min: 70, max: 95 })
+      validate(battery, { min: 10, max: 50 }),
+      validate(load, { min: 300, max: 500 }),
+      validate(performance, { min: 70, max: 95 })
     ];
 
-    const errors = validations.filter(v => !v.valid);
-    if (errors.length > 0) {
-      throw new Error(errors[0].error);
-    }
-
-    // Would send to API in production
-    console.log('Alert configuration updated:', {
-      batteryThreshold,
-      loadThreshold,
-      performanceThreshold
-    });
+    const firstError = validations.find(v => !v.valid);
+    if (firstError) throw new Error(firstError.error);
+    
+    console.log('Alert configuration updated:', { battery, load, performance });
   }
 
   /**
@@ -263,13 +288,10 @@ class UIController {
    * Render all UI elements
    */
   renderAll() {
-    const status = stateManager.get('currentStatus');
-    const recommendations = stateManager.get('recommendations');
-    const alerts = stateManager.get('alerts');
-
-    if (status) this.updateDashboard(status);
-    if (recommendations) this.renderRecommendations(recommendations);
-    if (alerts) this.renderAlerts(alerts);
+    this.updateDashboard(stateManager.get('currentStatus'));
+    this.renderRecommendations(stateManager.get('recommendations'));
+    this.renderAlerts(stateManager.get('alerts'));
+    this.updateHeaderUI();
   }
 
   /**
@@ -277,31 +299,16 @@ class UIController {
    */
   updateDashboard(status) {
     if (!status) return;
-
-    // Update KPI values
     this.updateElement('total-generation', `${formatNumber(status.total_generation)} kW`);
     this.updateElement('campus-load', `${formatNumber(status.campus_load)} kW`);
     this.updateElement('battery-soc', `${formatNumber(status.battery_soc)}%`);
     this.updateElement('grid-power', `${formatNumber(Math.abs(status.grid_power))} kW`);
-
-    // Update system status
-    const solarCapacityPct = Math.round((status.solar_generation / CONFIG.CAMPUS_INFO.solar_capacity) * 100);
-    const windCapacityPct = Math.round((status.wind_generation / CONFIG.CAMPUS_INFO.wind_capacity) * 100);
-
-    this.updateElement('solar-status', `${formatNumber(status.solar_generation)} kW (${solarCapacityPct}% capacity)`);
-    this.updateElement('wind-status', `${formatNumber(status.wind_generation)} kW (${windCapacityPct}% capacity)`);
-    
-    const batteryStatus = status.battery_power > 0 
-      ? `Charging at ${formatNumber(status.battery_power)} kW`
-      : `Discharging at ${formatNumber(Math.abs(status.battery_power))} kW`;
-    this.updateElement('battery-status', batteryStatus);
-    
-    const gridStatus = status.grid_power < 0
-      ? `Exporting ${formatNumber(Math.abs(status.grid_power))} kW`
-      : `Importing ${formatNumber(status.grid_power)} kW`;
-    this.updateElement('grid-status', gridStatus);
-
-    // Update weather
+    const solarPct = (status.solar_generation / CONFIG.CAMPUS_INFO.solar_capacity) * 100;
+    const windPct = (status.wind_generation / CONFIG.CAMPUS_INFO.wind_capacity) * 100;
+    this.updateElement('solar-status', `${formatNumber(status.solar_generation)} kW (${solarPct.toFixed(0)}% capacity)`);
+    this.updateElement('wind-status', `${formatNumber(status.wind_generation)} kW (${windPct.toFixed(0)}% capacity)`);
+    this.updateElement('battery-status', status.battery_power > 0 ? `Charging at ${formatNumber(status.battery_power)} kW` : `Discharging at ${formatNumber(Math.abs(status.battery_power))} kW`);
+    this.updateElement('grid-status', status.grid_power < 0 ? `Exporting ${formatNumber(Math.abs(status.grid_power))} kW` : `Importing ${formatNumber(status.grid_power)} kW`);
     if (status.weather) {
       this.updateElement('temperature', `${formatNumber(status.weather.temperature)}°C`);
       this.updateElement('irradiance', `${formatNumber(status.weather.irradiance, 0)} W/m²`);
@@ -316,34 +323,15 @@ class UIController {
   renderRecommendations(recommendations) {
     const container = getElement('recommendations');
     if (!container || !recommendations) return;
-
-    container.innerHTML = '';
-    
-    recommendations.forEach(rec => {
-      const item = document.createElement('div');
-      item.className = `recommendation-item ${rec.priority}`;
-      
-      const priorityBadge = document.createElement('span');
-      priorityBadge.className = `recommendation-priority ${rec.priority}`;
-      priorityBadge.textContent = rec.priority.toUpperCase();
-      
-      const savings = document.createElement('span');
-      savings.className = 'recommendation-savings';
-      savings.textContent = rec.savings;
-      
-      const header = document.createElement('div');
-      header.className = 'recommendation-header';
-      header.appendChild(priorityBadge);
-      header.appendChild(savings);
-      
-      const message = document.createElement('p');
-      message.className = 'recommendation-message';
-      message.textContent = rec.message;
-      
-      item.appendChild(header);
-      item.appendChild(message);
-      container.appendChild(item);
-    });
+    container.innerHTML = recommendations.map(rec => `
+      <div class="recommendation-item ${rec.priority}">
+        <div class="recommendation-header">
+          <span class="recommendation-priority ${rec.priority}">${sanitizeHTML(rec.priority.toUpperCase())}</span>
+          <span class="recommendation-savings">${sanitizeHTML(rec.savings)}</span>
+        </div>
+        <p class="recommendation-message">${sanitizeHTML(rec.message)}</p>
+      </div>
+    `).join('');
   }
 
   /**
@@ -352,43 +340,40 @@ class UIController {
   renderAlerts(alerts) {
     const container = getElement('alerts-list');
     if (!container || !alerts) return;
-
-    container.innerHTML = '';
+    container.innerHTML = alerts.map(alert => {
+      const time = formatDateTime(new Date(alert.timestamp), { year: undefined, month: undefined, day: undefined });
+      return `
+        <div class="alert-item ${alert.type}">
+          <div class="alert-header">
+            <span class="alert-type">${sanitizeHTML(alert.type.toUpperCase())}</span>
+            <span class="alert-time">${time}</span>
+          </div>
+          <p class="alert-message">${sanitizeHTML(alert.message)}</p>
+        </div>
+      `;
+    }).join('');
+  }
+  
+  /**
+   * Update header UI based on auth state
+   */
+  updateHeaderUI() {
+    const container = getElement('user-controls');
+    if (!container) return;
     
-    alerts.forEach(alert => {
-      const item = document.createElement('div');
-      item.className = `alert-item ${alert.type}`;
-      
-      const time = new Date(alert.timestamp);
-      const timeString = formatDateTime(time, { 
-        hour: '2-digit', 
-        minute: '2-digit',
-        year: undefined,
-        day: undefined,
-        month: undefined
-      });
-      
-      const typeBadge = document.createElement('span');
-      typeBadge.className = 'alert-type';
-      typeBadge.textContent = alert.type.toUpperCase();
-      
-      const timeSpan = document.createElement('span');
-      timeSpan.className = 'alert-time';
-      timeSpan.textContent = timeString;
-      
-      const header = document.createElement('div');
-      header.className = 'alert-header';
-      header.appendChild(typeBadge);
-      header.appendChild(timeSpan);
-      
-      const message = document.createElement('p');
-      message.className = 'alert-message';
-      message.textContent = alert.message;
-      
-      item.appendChild(header);
-      item.appendChild(message);
-      container.appendChild(item);
-    });
+    const isAuthenticated = stateManager.get('isAuthenticated');
+    const user = stateManager.get('user');
+    
+    if (isAuthenticated && user) {
+      container.innerHTML = `
+        <div class="user-profile">
+          <span>Welcome, ${sanitizeHTML(user.name)}</span>
+          <button id="logout-btn" class="btn btn--secondary btn--sm">Logout</button>
+        </div>
+      `;
+    } else {
+      container.innerHTML = `<button id="login-btn" class="btn btn--secondary">Login</button>`;
+    }
   }
 
   /**
@@ -398,18 +383,11 @@ class UIController {
     const modal = getElement('detail-modal');
     const title = getElement('modal-title');
     const body = getElement('modal-body');
-    
     if (!modal || !title || !body) return;
-
-    const titleElement = element.querySelector('h3, h4');
-    const valueElement = element.querySelector('.kpi-value, .savings-value, .carbon-value, p');
-    
-    const titleText = titleElement ? titleElement.textContent : 'System Details';
-    const valueText = valueElement ? valueElement.textContent : '';
-    
+    const titleText = element.querySelector('h3, h4')?.textContent || 'Details';
+    const valueText = element.querySelector('.kpi-value, p')?.textContent || '';
     title.textContent = titleText;
     body.innerHTML = this.generateModalContent(element, titleText, valueText);
-    
     modal.classList.remove('hidden');
   }
 
@@ -417,38 +395,13 @@ class UIController {
    * Generate modal content
    */
   generateModalContent(element, titleText, valueText) {
-    const status = stateManager.get('currentStatus');
-    
     if (element.classList.contains('kpi-card')) {
       return `
-        <div class="detail-content">
-          <h4>Current Value: ${sanitizeHTML(valueText)}</h4>
-          <p>Real-time monitoring of ${sanitizeHTML(titleText.toLowerCase())} across the campus energy system.</p>
-          <div class="detail-metrics">
-            <div class="metric">
-              <h5>24h Average</h5>
-              <p>${status ? formatNumber(status.total_generation * 0.92) : '378'} kW</p>
-            </div>
-            <div class="metric">
-              <h5>Peak Today</h5>
-              <p>${status ? formatNumber(status.total_generation * 1.14) : '465'} kW</p>
-            </div>
-            <div class="metric">
-              <h5>Efficiency</h5>
-              <p>${Math.round(88 + Math.random() * 8)}%</p>
-            </div>
-          </div>
-        </div>
+        <h4>Current Value: ${sanitizeHTML(valueText)}</h4>
+        <p>Real-time monitoring of ${sanitizeHTML(titleText.toLowerCase())}.</p>
       `;
     }
-    
-    return `
-      <div class="detail-content">
-        <h4>${sanitizeHTML(titleText)}</h4>
-        <p>${sanitizeHTML(valueText)}</p>
-        <p>System component operating within normal parameters.</p>
-      </div>
-    `;
+    return `<p>${sanitizeHTML(valueText)}</p>`;
   }
 
   /**
@@ -456,21 +409,14 @@ class UIController {
    */
   updateElement(id, content) {
     const element = getElement(id);
-    if (element) {
-      element.textContent = content;
-    }
+    if (element) element.textContent = content;
   }
 
   /**
    * Update loading state
    */
   updateLoadingState(loading) {
-    const body = document.body;
-    if (loading) {
-      body.classList.add('loading');
-    } else {
-      body.classList.remove('loading');
-    }
+    document.body.classList.toggle('loading', loading);
   }
 
   /**

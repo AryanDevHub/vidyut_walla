@@ -8,6 +8,8 @@ import dataManager from './dataManager.js';
 import chartManager from './chartManager.js';
 import uiController from './uiController.js';
 import stateManager from './stateManager.js';
+import settingsManager from './settingsManager.js';
+import authService from './authService.js'; // Import auth service
 
 class EnergyManagementApp {
   constructor() {
@@ -26,8 +28,14 @@ class EnergyManagementApp {
     try {
       console.log('Initializing Campus Energy Management System...');
 
-      // Initialize UI first (for loading states)
+      // Initialize settings first to apply theme
+      settingsManager.init();
+
+      // Initialize UI (for loading states and base structure)
       uiController.init();
+      
+      // Initialize auth service
+      // authService is already initialized at import time
 
       // Initialize data manager (loads data and starts updates)
       await dataManager.init();
