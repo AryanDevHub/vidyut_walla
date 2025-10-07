@@ -21,10 +21,16 @@ const Sidebar = ({ activeSection, setActiveSection, isOpen, setIsOpen }) => {
 
     return (
         <aside className={`sidebar ${isOpen ? 'open' : ''}`}>
+            {/* --- MODIFIED THIS HEADER TO MATCH THE NEW DESIGN --- */}
             <div className="sidebar-header">
-                <h3>Campus VPP</h3>
+                <img src={process.env.PUBLIC_URL + '/cropped.jpg'} alt="Logo" className="sidebar-logo" />
+                <div className="sidebar-title">
+                    <span>Vidyut</span>
+                    <span>Sanchalak</span>
+                </div>
                 <button className="sidebar-close-btn" onClick={() => setIsOpen(false)} aria-label="Close menu">&times;</button>
             </div>
+            
             <nav className="sidebar-nav">
                 <ul>
                     {accessibleNavItems.map(item => (
